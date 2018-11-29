@@ -23,7 +23,8 @@ MODULE lapack
              lapack_sgesvd, lapack_cgesvd, &
              lapack_sgesv, lapack_sgelss, &
              lapack_ssygv, lapack_sgbsv, &
-             lapack_spotrf, lapack_strtri
+             lapack_spotrf, lapack_strtri, &
+             lapack_dgeqp3
 
    INTERFACE lapack_ssyev
 ! **************************************************************************************************
@@ -391,6 +392,34 @@ MODULE lapack
 
       END SUBROUTINE dgelss
    END INTERFACE
+
+  INTERFACE lapack_dgeqp3
+  ! *****************************************************************************
+!> \brief Computes QR factorization with column pivoting of A: AP = QR
+!> \param m rows of A
+!> \param n columns of A
+!> \param input matrix, on exit upper triangle R, below v needed for Q (see below)
+!> \param lda leading dimension >= max(1,M)
+!> \param jpvt jpvt(j) = k --> AP(:,j) = A(:,k)
+!> \param tau scalar factors of elementary reflectors (needed for Q (see below))
+!> \param work work(1) returns optimal workspace
+!> \param lwork dimension of array work >= 3*N + 1
+!> \param info, 0 when successful
+!> 
+!> Q = product(H(i)) 0<i<min(m,n)+1
+!> H(i) = I - tau(i)*v*transpose(v)
+!> v(1:i-1)=0; v(i)=1; v(i+1:m)=A(i+1:m,i)
+! *****************************************************************************
+     SUBROUTINE  dgeqp3(m,n,a,lda,jpvt,tau,work,lwork,info)
+       USE kinds, ONLY: dp
+
+    INTEGER                                  :: info, lda, lwork, m, n
+    REAL(KIND=dp)                            :: a(lda,*), tau(*), work(*)
+    INTEGER                                  :: jpvt(*)
+
+     END SUBROUTINE dgeqp3
+  END INTERFACE
+
 
 END MODULE lapack
 

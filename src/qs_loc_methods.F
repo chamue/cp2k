@@ -47,8 +47,8 @@ MODULE qs_loc_methods
    USE cp_units,                        ONLY: cp_unit_from_cp2k
    USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_constants,                 ONLY: &
-        do_loc_crazy, do_loc_direct, do_loc_jacobi, do_loc_l1_norm_sd, do_loc_none, dump_dcd, &
-        dump_dcd_aligned_cell, dump_xmol, op_loc_berry, op_loc_boys, op_loc_pipek, state_loc_list
+           do_loc_crazy, do_loc_direct, do_loc_jacobi, do_loc_l1_norm_sd, do_loc_scdm, do_loc_none,&
+           dump_dcd,dump_dcd_aligned_cell, dump_xmol, op_loc_berry, op_loc_boys, op_loc_pipek, state_loc_list
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_ivals,&
                                               section_get_lval,&
@@ -98,6 +98,7 @@ MODULE qs_loc_methods
    USE qs_subsys_types,                 ONLY: qs_subsys_get,&
                                               qs_subsys_type
    USE string_utilities,                ONLY: xstring
+   USE scdm,                            ONLY: scdm_rs
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -139,7 +140,7 @@ CONTAINS
 !>       optimization routines are specific for this case
 !>       The file for the centers and the spreads have a xyz format
 ! **************************************************************************************************
-   SUBROUTINE optimize_loc_berry(method, qs_loc_env, vectors, op_sm_set, &
+   SUBROUTINE optimize_loc_berry(method, qs_loc_env, vectors, op_sm_set, qs_env, &
                                  zij_fm_set, para_env, cell, weights, ispin, print_loc_section)
 
       INTEGER, INTENT(IN)                                :: method
@@ -152,6 +153,7 @@ CONTAINS
       REAL(dp), DIMENSION(:)                             :: weights
       INTEGER, INTENT(IN)                                :: ispin
       TYPE(section_vals_type), POINTER                   :: print_loc_section
+      TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CHARACTER(len=*), PARAMETER :: routineN = 'optimize_loc_berry', &
          routineP = moduleN//':'//routineN
@@ -238,6 +240,11 @@ CONTAINS
                ENDDO
             ENDDO
          END IF
+      CASE (do_loc_scdm)
+         CALL scdm_rs(qs_env=qs_env, zij=zij_fm_set, vectors=vectors, ispin=ispin)
+         CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
+              eps_localization=eps_localization, sweeps=sweeps, &
+              out_each=out_each, target_time=target_time, start_time=start_time)
       CASE (do_loc_none)
          IF (output_unit > 0) THEN
             WRITE (output_unit, '(T4,A,I6,A)') " No MOS localization applied "
@@ -676,7 +683,7 @@ CONTAINS
             CALL cp_fm_struct_release(tmp_fm_struct)
 
             CALL optimize_loc_berry(loc_method, qs_loc_env, moloc_coeff(ispin)%matrix, op_sm_set, &
-                                    op_fm_set, para_env, cell, weights, ispin, print_loc_section)
+                                    qs_env, op_fm_set, para_env, cell, weights, ispin, print_loc_section)
 
             ! Here we dealloctate op_fm_set
             IF (ASSOCIATED(op_fm_set)) THEN
