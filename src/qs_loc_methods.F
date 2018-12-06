@@ -256,14 +256,11 @@ CONTAINS
          IF (sweeps <= max_iter) WRITE (output_unit, '(T4,A,I3,A,I6,A)') " Localization  for spin ", ispin, &
             " converged in ", sweeps, " iterations"
       ENDIF
-
       CALL centers_spreads_berry(qs_loc_env, zij_fm_set, nmoloc, cell, weights, &
                                  ispin, print_loc_section)
       CALL cp_fm_release(opvec)
       CALL cp_print_key_finished_output(output_unit, logger, print_loc_section, "PROGRAM_RUN_INFO")
-
       CALL timestop(handle)
-
    END SUBROUTINE optimize_loc_berry
 
 ! **************************************************************************************************
@@ -684,7 +681,6 @@ CONTAINS
 
             CALL optimize_loc_berry(loc_method, qs_loc_env, moloc_coeff(ispin)%matrix, op_sm_set, &
                                     qs_env, op_fm_set, para_env, cell, weights, ispin, print_loc_section)
-
             ! Here we dealloctate op_fm_set
             IF (ASSOCIATED(op_fm_set)) THEN
                DO i = 1, dim_op
@@ -694,7 +690,6 @@ CONTAINS
                END DO
                DEALLOCATE (op_fm_set)
             END IF
-
          CASE (op_loc_boys)
             CPABORT("Boys localization not implemented")
 
@@ -708,10 +703,8 @@ CONTAINS
          IF (.NOT. PRESENT(ext_mo_coeff)) THEN
             CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
          END IF
-
          lb = localized_wfn_control%lu_bound_states(1, ispin)
          ub = localized_wfn_control%lu_bound_states(2, ispin)
-
          IF (localized_wfn_control%set_of_states == state_loc_list) THEN
             ALLOCATE (vecbuffer(1, nao))
             nmosub = SIZE(localized_wfn_control%loc_states, 1)
@@ -737,12 +730,11 @@ CONTAINS
          ELSE
             nmosub = localized_wfn_control%nloc_states(ispin)
             IF (PRESENT(ext_mo_coeff)) THEN
-               CALL cp_fm_to_fm(moloc_coeff(ispin)%matrix, ext_mo_coeff, nmosub, 1, lb)
+              CALL cp_fm_to_fm(moloc_coeff(ispin)%matrix, ext_mo_coeff, nmosub, 1, lb)
             ELSE
                CALL cp_fm_to_fm(moloc_coeff(ispin)%matrix, mo_coeff, nmosub, 1, lb)
             END IF
          END IF
-
          ! Write cube files if required
          IF (localized_wfn_control%print_cubes) THEN
             list_cubes_setup = .FALSE.

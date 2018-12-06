@@ -19,13 +19,15 @@ MODULE scdm
    USE cp_control_types,                 ONLY: dft_control_type
    USE qs_mo_types,                      ONLY: mo_set_p_type
    USE particle_types,                   ONLY: particle_type
-   USE particle_list_types,              ONLY: particle_list_create, &
-                                               particle_list_type
+   USE particle_list_types,              ONLY: particle_list_type
+   USE qs_subsys_types,                  ONLY: qs_subsys_get,&
+                                               qs_subsys_type
    USE pw_env_types,                     ONLY: pw_env_get,&
                                                pw_env_type    
    USE pw_pool_types,                    ONLY: pw_pool_type, &
                                                pw_pool_p_type, &
-                                               pw_pool_create_pw
+                                               pw_pool_create_pw, &
+                                               pw_pool_give_back_pw
    USE pw_types,                         ONLY: COMPLEXDATA1D,&
                                                REALDATA3D,&
                                                REALSPACE,&
@@ -48,12 +50,11 @@ MODULE scdm
    USE kinds,                           ONLY: dp
    USE qs_localization_methods,         ONLY: rotate_orbitals
    USE pw_grid_types,                   ONLY: PW_MODE_LOCAL
-
+  
 #include "./base/base_uses.f90"
-
+  
   IMPLICIT NONE
   PRIVATE
-
   PUBLIC :: scdm_rs
 
   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'scdm'
@@ -75,8 +76,8 @@ CONTAINS
    INTEGER, DIMENSION(:), OPTIONAL, POINTER      :: stride
 
    ! Working Variables
-   integer                                       :: k, l, i, j, INFO, reason, M, N, &
-                                                    ivector, ne, np, ii1, ii2, ii3
+   integer                                       :: k, i, j, INFO, reason, M, N, &
+                                                    ivector, ne, np
    real(kind=dp), allocatable, dimension(:,:)    :: vectors_rs ! M, N
    double precision, allocatable, dimension(:,:) :: Psicon ! N, M
    double precision, allocatable, dimension(:)   :: Tau, v ! N
@@ -86,49 +87,46 @@ CONTAINS
    integer, allocatable, dimension(:)            :: jpvt 
    INTEGER :: homo, my_stride
    TYPE(atomic_kind_type), DIMENSION(:), &
-      POINTER                                    :: atomic_kind_set
-   TYPE(cp_fm_type), POINTER                     :: mo_coeff
-   TYPE(dft_control_type), POINTER               :: dft_control
+      POINTER                                    :: atomic_kind_set !!! get_qs_env
+   TYPE(cp_fm_type), POINTER                     :: mo_coeff        !!! get_mo_set
+   TYPE(dft_control_type), POINTER               :: dft_control     !!! get_qs_env
    TYPE(mo_set_p_type), DIMENSION(:), &
-       POINTER                                   :: mos
-   TYPE(particle_list_type), POINTER             :: particles 
+       POINTER                                   :: mos             !!! get_qs_env
+   TYPE(particle_list_type), POINTER             :: particles       !!! particle_list_create
    TYPE(particle_type), DIMENSION(:), &
-      POINTER                                    :: particle_set
-   TYPE(pw_env_type), POINTER                    :: pw_env
-   TYPE(pw_p_type)                               :: wf_g, wf_r
+      POINTER                                    :: particle_set    !!! get_qs_env
+   TYPE(pw_env_type), POINTER                    :: pw_env          !!! get_qs_env
+   TYPE(pw_p_type)                               :: wf_g, wf_r      
    TYPE(qs_kind_type), DIMENSION(:), &
-      POINTER                                    :: qs_kind_set
-   TYPE(particle_list_type), POINTER             :: my_particles  
-   TYPE(pw_pool_type), POINTER                   :: auxbas_pw_pool
+      POINTER                                    :: qs_kind_set     !!! get_qs_env
+   TYPE(particle_list_type), POINTER             :: my_particles    !!! my_particles => particles
+   TYPE(pw_pool_type), POINTER                   :: auxbas_pw_pool  !!! pw_env_get
    TYPE(pw_pool_p_type), DIMENSION(:), &
-      POINTER                                    :: pw_pools
-   TYPE(cell_type), POINTER                      :: cell
-   INTEGER, allocatable, DIMENSION(:)            :: particles_z
-   INTEGER :: checksum, dest, gid, I1, I2, I3, N2, N3, ind, ip, L1, L2, &
-      L3, my_rank, num_pe, rank(2), source, stat, tag, U1, &
-     U2, U3
+      POINTER                                    :: pw_pools        !!! pw_env_get
+   TYPE(cell_type), POINTER                      :: cell            !!! get_qs_env
+   INTEGER :: checksum, dest, gid, I1, I2, I3, N2, N3, ind, ip, &
+     my_rank, num_pe, rank(2), source, stat, tag
    LOGICAL                                       :: failure
    REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)      :: buf
-   type(cp_fm_type), pointer                     :: rmat
+   type(cp_fm_type), pointer                     :: rmat           !(!!)
+   TYPE(qs_subsys_type), POINTER                 :: subsys
+   integer, dimension(3)                         :: L, U, Lmax, Umax
 
    CHARACTER(len=*), PARAMETER :: routineN = 'scdm_rs', &
            routineP = moduleN//':'//routineN
-   
-   print *, "I arrived in scdm module"
    ! Start calculating realspace orbitals
-   NULLIFY(atomic_kind_set, qs_kind_set, cell, dft_control, mos, &
-           particle_set, pw_env)
-
+   NULLIFY(dft_control, pw_env, auxbas_pw_pool, pw_pools, mos, mo_coeff, &
+           subsys, particles, my_particles)
    CALL get_qs_env(qs_env=qs_env,&
                          atomic_kind_set=atomic_kind_set,&
                          qs_kind_set=qs_kind_set,&
                          cell=cell,&
                          dft_control=dft_control,&
-                         mos=mos,&
-                         particle_set=particle_set,&
+                         mos=mos, &
+                         subsys=subsys, &
+                         particle_set=particle_set, &
                          pw_env=pw_env)
-   print *, "Got the qs environment"
-   Nullify(auxbas_pw_pool, pw_pools)
+   CALL qs_subsys_get(subsys, particles=particles)
    CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool,&
                           pw_pools=pw_pools)
    CALL pw_pool_create_pw(auxbas_pw_pool,wf_r%pw,&
@@ -138,117 +136,90 @@ CONTAINS
    CALL pw_pool_create_pw(auxbas_pw_pool,wf_g%pw,&
                                   use_data = COMPLEXDATA1D,&
                                   in_space = RECIPROCALSPACE)
-   print *, "Created the pw environment"
-   CALL particle_list_create(list=particles,els_ptr=particle_set)
-   Nullify(mo_coeff)
    CALL get_mo_set(mos(ispin)%mo_set,mo_coeff=mo_coeff,homo=homo)
-   NULLIFY(my_particles)
    my_particles=>particles
    ne = my_particles%n_els
-   ALLOCATE(particles_z(ne))
-   DO i=1, ne
-      CALL get_atomic_kind(my_particles%els(i)%atomic_kind,z=particles_z(i)) 
-   END DO
-   print *, "Got all the MO information"
    failure=.FALSE.
    my_stride = 1
    ! for now, only stride = 1 is allowed
-   !if (present(stride)) then 
-   !   CALL cp_assert(SIZE(stride)==1.OR.SIZE(stride)==3,cp_fatal_level,cp_assertion_failed,routineP,&
-   !               "STRIDE keyword can accept only 1 (the same for X,Y,Z) or 3 values. Correct your input file."//&
-   !               CPSourceFileRef,&
-   !               only_ionode=.TRUE.)
-   !   IF (SIZE(stride)==3) THEN
-   !      DO i = 1,3
-   !        CALL cp_assert(stride(1)==stride(2).AND.stride(1)==stride(3),cp_fatal_level,cp_assertion_failed,routineP,&
-   !                    "scdm method only available with 3 equal stride values."//&
-   !                    CPSourceFileRef,&
-   !                    only_ionode=.TRUE.)
-   !        my_stride = stride(1)
-   !      END DO
-   !   ELSE 
-   !           my_stride = stride
-   !   END IF
-   !end if
-   !CPPrecondition(my_stride>0,cp_failure_level,routineP,error,failure)
-   np=MIN(99999,SIZE(particles_z))
-   print *, "Processed Stride"
+   if (present(stride)) then 
+      CPASSERT(SIZE(stride)==1.OR.SIZE(stride)==3)
+      IF (SIZE(stride)==3) THEN
+         CPASSERT(stride(1)==stride(2).AND.stride(1)==stride(3))
+      END IF  
+      my_stride = stride(1)
+   end if
+   CPASSERT(my_stride>0)
    ! getting the pw grid
    DO ivector=1,homo
-         print *, "at orbital", ivector
          CALL calculate_wavefunction(mo_vectors=mo_coeff,ivector=ivector,rho=wf_r,&
                  rho_gspace=wf_g,atomic_kind_set=atomic_kind_set,qs_kind_set=qs_kind_set,&
               cell=cell,dft_control=dft_control,particle_set=particle_set,&
               pw_env=pw_env)
-          print *, "calculated wavefunction"
           omega = wf_r%pw%pw_grid%dh(1,1)*REAL(my_stride,dp)
           omega = omega*omega*omega
           omega = sqrt(omega)
-          print *, "calculated omega"
           ! shortcut
-          L1=wf_r%pw%pw_grid%bounds(1,1)
-          L2=wf_r%pw%pw_grid%bounds(1,2)
-          L3=wf_r%pw%pw_grid%bounds(1,3)
-          U1=wf_r%pw%pw_grid%bounds(2,1)
-          U2=wf_r%pw%pw_grid%bounds(2,2)
-          U3=wf_r%pw%pw_grid%bounds(2,3)
-          ALLOCATE(buf(L3:U3),stat=stat)
+          !my_rank     = wf_r%pw%pw_grid%para%my_pos
+          !gid         = wf_r%pw%pw_grid%para%group
+          !num_pe      = wf_r%pw%pw_grid%para%group_size
+          !tag         = 1
+          !rank(2)     = my_rank
+          do i = 1,3
+            L(i) = wf_r%pw%pw_grid%bounds(1,i)
+            U(i) = wf_r%pw%pw_grid%bounds(2,i)
+          end do
+          ALLOCATE(buf(L(3):U(3)),stat=stat)
           IF (ivector==1) then
-                  ALLOCATE(vectors_rs((U1-L1)*(U2-L2)*(U3-L3),homo))
+         !   if (my_rank = 0)
+         !     do i = 1,3
+         !       call mp_gather(L(i),tmp,0,gid)
+         !       Lmin(i) = MIN(tmp)
+         !     end do
+         !     mp_bcast(Lmin,0,gid)
+         !   end if 
+            ALLOCATE(vectors_rs((U(1)-L(1)+1)*(U(2)-L(2)+1)*(U(3)-L(3)+1)+1,homo))
+         !   print *, "Size vectors_rs: ", shape(vectors_rs)
           END IF
-          print *, "about to initiate parallel stuff"
-          my_rank     = wf_r%pw%pw_grid%para%my_pos
-          gid         = wf_r%pw%pw_grid%para%group
-          num_pe      = wf_r%pw%pw_grid%para%group_size
-          tag         = 1
-          print *, "done"
-          rank(2)=my_rank
-          checksum=1
-          print *, "about to call mp functions"
-          CALL mp_sum(checksum,gid)
-          print *, "checksum: ", checksum
-          CPASSERT(checksum==1)
-          CALL mp_maxloc(rank,gid)
+         ! print *, "rank: ", my_rank, "L: ", L, "U: ", U 
+         ! checksum=1
+         ! CALL mp_sum(checksum,gid)
+         ! CPASSERT(checksum==1)
+         ! CALL mp_maxloc(rank,gid)
 
-          print *, "about to start double loop"
-          dest = rank(2)
-          ii1 = 0
-          ii2 = 0
-          ii3 = 0
-          DO I1=L1,U1,my_stride
-            ii1 = ii1 + 1
-            DO I2=L2,U2,my_stride
-                ii2 = ii2 + 1
+         ! dest = rank(2)
+         ind = 1
+          DO I1=L(1),U(1),my_stride
+            DO I2=L(2),U(2),my_stride
                 ! cycling through the CPUs, check if the current ray (I1,I2) is local to that CPU
-                IF (wf_r%pw%pw_grid%para%mode .NE. PW_MODE_LOCAL ) THEN
-                   DO ip=0,num_pe-1
-                      IF (wf_r%pw%pw_grid%para%bo (1,1,ip,1)<=I1-L1+1 .AND. wf_r%pw%pw_grid%para%bo (2,1,ip,1)>=I1-L1+1 .AND. &
-                          wf_r%pw%pw_grid%para%bo (1,2,ip,1)<=I2-L2+1 .AND. wf_r%pw%pw_grid%para%bo (2,2,ip,1)>=I2-L2+1 ) THEN
-                         source = ip
-                      ENDIF
-                    ENDDO
-                ELSE
-                   source = dest
-                ENDIF
-                IF (source==dest) THEN
-                   IF (my_rank==source) THEN
+                !IF (wf_r%pw%pw_grid%para%mode .NE. PW_MODE_LOCAL ) THEN
+                   !DO ip=0,num_pe-1
+                    !  IF (wf_r%pw%pw_grid%para%bo (1,1,ip,1)<=I1-L(1)+1 .AND. wf_r%pw%pw_grid%para%bo (2,1,ip,1)>=I1-L(1)+1 .AND. &
+                    !      wf_r%pw%pw_grid%para%bo (1,2,ip,1)<=I2-L(2)+1 .AND. wf_r%pw%pw_grid%para%bo (2,2,ip,1)>=I2-L(2)+1 ) THEN
+                    !     source = ip
+                    !  ENDIF
+                    !ENDDO
+                !ELSE
+                   !source = dest
+                !ENDIF
+                !IF (source==dest) THEN
+                !   IF (my_rank==source) THEN
                       buf(:)=wf_r%pw%cr3d(I1,I2,:)
-                   ENDIF
-                ELSE
-                   IF(my_rank==source) THEN
-                      buf(:)=wf_r%pw%cr3d(I1,I2,:)
-                      CALL mp_send(buf,dest,tag,gid)
-                   ENDIF
-                   IF(my_rank==dest) THEN
-                   CALL mp_recv(buf,source,tag,gid)
-                   ENDIF
-                ENDIF
-                DO I3 = L3,U3,my_stride
-                   ii3 = ii3 + 1
-                   N2 = U2 - L2
-                   N3 = U3 - L3
-                   ind = ((ii1-1)*N2+ii2-1)*N3+ii3
+                !   ENDIF
+                !ELSE
+                !   IF(my_rank==source) THEN
+                !      buf(:)=wf_r%pw%cr3d(I1,I2,:)
+                !      CALL mp_send(buf,dest,tag,gid)
+                !   ENDIF
+                !   IF(my_rank==dest) THEN
+                !   CALL mp_recv(buf,source,tag,gid)
+                !   ENDIF
+                !ENDIF
+                DO I3 = L(3),U(3),my_stride
+                   !if (modulo(ind,10000)==0) print *, ind
                    vectors_rs(ind,ivector)=buf(I3)
+                   ind = ind + 1 
+                   if (ind < 1 .or. ind > size(vectors_rs,dim=1)) print *, ind
                 END DO
 
           ! this double loop generates so many messages that it can overload
@@ -257,14 +228,14 @@ CONTAINS
           ! that flies around at any given time.
           ! if ever this routine becomes a bottleneck, we should go for a
           ! more complicated rewrite
-               CALL mp_sync(gid)
+               !CALL mp_sync(gid)
 
          ENDDO
        ENDDO
        
        DEALLOCATE(buf)
    END DO
-   
+   print *, "vectors_rs: ", shape(vectors_rs), "ind: ", ind
    print *, "start scdm calculation"
    M = size(vectors_rs,dim=1)
    N = size(vectors_rs,dim=2)
@@ -285,7 +256,7 @@ CONTAINS
 
    ! Pivoted QR Decomposition of Psicon
    call lapack_dgeqp3(N,M,Psicon,N,jpvt,Tau,Work,3*M+1,INFO)
-   print *, 'INFO (0 = success)', INFO
+   CPASSERT(INFO==0)
 do i = 1,N
       H = 0
       v(1:i-1)=0
@@ -295,8 +266,8 @@ do i = 1,N
          H(j,j)=1
       end do
       do k = 1,N
-        do l = 1,N
-          Vtensor(k,l) = v(k)*v(l)
+        do j = 1,N
+          Vtensor(k,j) = v(k)*v(j)
         end do
       end do
       H = H - Tau(i)*Vtensor
@@ -306,26 +277,24 @@ do i = 1,N
          Q = matmul(Q,H)
       end if
    end do
-   print *, "Created Q (dp) successfully"
+   print *, "Q: ", Q
    ! Convert Q to full matrix type
    nullify(rmat)
    CALL cp_fm_create(rmat,zij(1,1)%matrix%matrix_struct)
    rmat%matrix_struct%nrow_global = homo
    rmat%matrix_struct%ncol_global = homo
-   print *, "Initialized rmat successfully"
    CALL cp_fm_set_all(rmat, 0._dp, 1._dp)
-   print *, "Set rmat"
    rmat%local_data = REAL(Q, dp)
-   print *, "Inserted Q in rmat"
    ! Calculate Phi
    Call rotate_orbitals(rmat,vectors)                                ! Produces orthogonalized Phi
-   print *, "Rotated orbitals"
    !vectors = matmul(vectors,transpose(vectors(jpvt(1:N),:))) ! non-orthogonal Phi
    CALL cp_fm_release(matrix=rmat)
-   CALL cp_fm_release(matrix=mo_coeff)
-   print *, "released rmat"
-   deallocate(Psicon, Tau, v, Work, Q, H, jpvt, Vtensor, vectors_rs, particles_z) 
-   print *, "end"
+   CALL pw_pool_give_back_pw(auxbas_pw_pool, wf_r%pw)
+   CALL pw_pool_give_back_pw(auxbas_pw_pool, wf_g%pw)
+   !CALL particle_list_release(particles)
+
+   deallocate(Psicon, Tau, v, Work, Q, H, jpvt, Vtensor, vectors_rs) 
+   print *, "end scdm calculations"
 
   END SUBROUTINE scdm_rs
 

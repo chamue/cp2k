@@ -659,8 +659,8 @@ CONTAINS
       CALL keyword_create( &
          keyword, name="METHOD", &
          description="Method of optimization if any", &
-         usage="METHOD (JACOBI|CRAZY|DIRECT|L1SD|NONE)", &
-         enum_c_vals=s2a("NONE", "JACOBI", "CRAZY", "L1SD", "DIRECT"), &
+         usage="METHOD (JACOBI|CRAZY|DIRECT|L1SD|SCDM|NONE)", &
+         enum_c_vals=s2a("NONE", "JACOBI", "CRAZY", "L1SD", "SCDM", "DIRECT"), &
          enum_i_vals=(/do_loc_none, &
                        do_loc_jacobi, &
                        do_loc_crazy, &
@@ -671,6 +671,7 @@ CONTAINS
                        "Using 2 x 2 rotations of the orbitals, slow but robust", &
                        "A new fast method is applied, might be slightly less robust than jacobi, but usually much faster", &
                        "Steepest descent minimization of an approximate l1 norm", &
+                       "Using SCDM outcome as initial guess for Jacobi", &
                        "Using a direct minimisation approach"), &
          default_i_val=do_loc_jacobi)
       CALL section_add_keyword(section, keyword)
