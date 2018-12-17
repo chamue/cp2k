@@ -242,6 +242,18 @@ CONTAINS
          END IF
       CASE (do_loc_scdm)
          CALL scdm_rs(qs_env=qs_env, zij=zij_fm_set, vectors=vectors, ispin=ispin)
+         ! here we need to set zij for the computation of the centers and spreads
+            DO i = 1, SIZE(zij_fm_set, 2)
+               DO j = 1, SIZE(zij_fm_set, 1)
+                  CALL cp_fm_set_all(zij_fm_set(j, i)%matrix, 0.0_dp)
+                  CALL cp_dbcsr_sm_fm_multiply(op_sm_set(j, i)%matrix, vectors, opvec, ncol=nmoloc)
+                  CALL cp_gemm("T", "N", nmoloc, nmoloc, nao, 1.0_dp, vectors, opvec, 0.0_dp, &
+                               zij_fm_set(j, i)%matrix)
+               ENDDO
+            ENDDO
+            WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
+         CALL centers_spreads_berry(qs_loc_env,zij_fm_set,nmoloc,cell,weights, &
+                 ispin, print_loc_section)
          CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
               eps_localization=eps_localization, sweeps=sweeps, &
               out_each=out_each, target_time=target_time, start_time=start_time)
