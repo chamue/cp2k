@@ -12,7 +12,6 @@
 !> \author Charlotte Mueller (12.2018) 
 ! *****************************************************************************
 MODULE scdm
-   USE atomic_kind_types,                ONLY: get_atomic_kind
    USE qs_environment_types,             ONLY: get_qs_env, &
                                                qs_environment_type
    USE atomic_kind_types,                ONLY: atomic_kind_type
@@ -21,13 +20,9 @@ MODULE scdm
    USE cp_control_types,                 ONLY: dft_control_type
    USE qs_mo_types,                      ONLY: mo_set_p_type
    USE particle_types,                   ONLY: particle_type
-   USE particle_list_types,              ONLY: particle_list_type
-   USE qs_subsys_types,                  ONLY: qs_subsys_get,&
-                                               qs_subsys_type
    USE pw_env_types,                     ONLY: pw_env_get,&
                                                pw_env_type    
    USE pw_pool_types,                    ONLY: pw_pool_type, &
-                                               pw_pool_p_type, &
                                                pw_pool_create_pw, &
                                                pw_pool_give_back_pw
    USE pw_types,                         ONLY: COMPLEXDATA1D,&
@@ -43,16 +38,14 @@ MODULE scdm
                                                cp_fm_release, &
                                                cp_fm_p_type
    USE qs_collocate_density,             ONLY: calculate_wavefunction
-   !USE message_passing,                  ONLY: mp_maxloc,&
-   !                                            mp_recv,&
-   !                                            mp_send,&
-   !                                            mp_sum, &
-   !                                            mp_sync
    USE lapack,                          ONLY: lapack_dgeqp3
    USE kinds,                           ONLY: dp
-   USE qs_localization_methods,         ONLY: rotate_orbitals
    USE pw_grid_types,                   ONLY: PW_MODE_LOCAL
-  
+   USE message_passing,                 ONLY: mp_recv, &
+                                              mp_send, &
+                                              mp_sum, &
+                                              mp_sync
+
 #include "./base/base_uses.f90"
   
   IMPLICIT NONE
@@ -69,69 +62,44 @@ CONTAINS
 !> \param weights: root of volume of single voxel (in realspace)
 !>
 ! *****************************************************************************
-  SUBROUTINE scdm_rs(qs_env, zij, vectors, ispin, stride)
+  SUBROUTINE scdm_rs(qs_env, zij, vectors, ispin)
    ! Input Variables
    TYPE(qs_environment_type), POINTER            :: qs_env
    TYPE(cp_fm_p_type), INTENT(INOUT)             :: zij(:,:)
    TYPE(cp_fm_type), POINTER                     :: vectors
    INTEGER                                       :: ispin
-   INTEGER, DIMENSION(:), OPTIONAL, POINTER      :: stride
 
    ! Working Variables
    integer                                       :: k, i, j, INFO, reason, M, N, &
-                                                    ivector, ne, np
-   real(kind=dp), allocatable, dimension(:,:)    ::  vectors_rs_2d ! M, N
-   real(kind=dp), allocatable, dimension(:,:,:,:) :: vectors_rs_4d
-   double precision, allocatable, dimension(:)   :: Tau, v ! N
-   double precision, allocatable, dimension(:)   :: Work ! 3M+1
-   double precision, allocatable, dimension(:,:) :: Q, H, Vtensor ! N, N
-   double precision                              :: omega
+                                                    ivector, homo
+   real(kind=dp), allocatable, dimension(:,:)    :: vectors_rs_2d, Q, H, Vtensor
+   real(kind=dp), allocatable, dimension(:)      :: Tau, v, Work
+   real(kind=dp)                                 :: omega
    integer, allocatable, dimension(:)            :: jpvt 
-   INTEGER :: homo, my_stride
    TYPE(atomic_kind_type), DIMENSION(:), &
       POINTER                                    :: atomic_kind_set !!! get_qs_env
    TYPE(cp_fm_type), POINTER                     :: mo_coeff        !!! get_mo_set
    TYPE(dft_control_type), POINTER               :: dft_control     !!! get_qs_env
    TYPE(mo_set_p_type), DIMENSION(:), &
        POINTER                                   :: mos             !!! get_qs_env
-   TYPE(particle_list_type), POINTER             :: particles       !!! particle_list_create
    TYPE(particle_type), DIMENSION(:), &
       POINTER                                    :: particle_set    !!! get_qs_env
    TYPE(pw_env_type), POINTER                    :: pw_env          !!! get_qs_env
    TYPE(pw_p_type)                               :: wf_g, wf_r      
    TYPE(qs_kind_type), DIMENSION(:), &
       POINTER                                    :: qs_kind_set     !!! get_qs_env
-   TYPE(particle_list_type), POINTER             :: my_particles    !!! my_particles => particles
    TYPE(pw_pool_type), POINTER                   :: auxbas_pw_pool  !!! pw_env_get
-   TYPE(pw_pool_p_type), DIMENSION(:), &
-      POINTER                                    :: pw_pools        !!! pw_env_get
    TYPE(cell_type), POINTER                      :: cell            !!! get_qs_env
-   INTEGER :: checksum, dest, gid, I1, I2, I3, N2, N3, ind, ip, &
-     my_rank, num_pe, rank(2), source, stat, tag
    LOGICAL                                       :: failure
-   REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)      :: buf
    type(cp_fm_type), pointer                     :: rmat           
-   TYPE(qs_subsys_type), POINTER                 :: subsys
-   integer, dimension(3)                         :: L, U, Lmax, Umax
-
+   integer, dimension(3)                         :: L, U
    CHARACTER(len=*), PARAMETER :: routineN = 'scdm_rs', &
            routineP = moduleN//':'//routineN
 
    ! Get working variables
-   NULLIFY(dft_control, pw_env, auxbas_pw_pool, pw_pools, mos, mo_coeff, &
-           subsys, particles, my_particles)
-   CALL get_qs_env(qs_env=qs_env,&
-                         atomic_kind_set=atomic_kind_set,&
-                         qs_kind_set=qs_kind_set,&
-                         cell=cell,&
-                         dft_control=dft_control,&
-                         mos=mos, &
-                         subsys=subsys, &
-                         particle_set=particle_set, &
-                         pw_env=pw_env)
-   CALL qs_subsys_get(subsys, particles=particles)
-   CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool,&
-                          pw_pools=pw_pools)
+   NULLIFY(dft_control, pw_env, auxbas_pw_pool, mos, mo_coeff)
+   CALL get_qs_env(qs_env=qs_env,dft_control=dft_control,mos=mos, pw_env=pw_env)
+   CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
    CALL pw_pool_create_pw(auxbas_pw_pool,wf_r%pw,&
                                   use_data = REALDATA3D,&
                                   in_space = REALSPACE)
@@ -140,74 +108,51 @@ CONTAINS
                                   use_data = COMPLEXDATA1D,&
                                   in_space = RECIPROCALSPACE)
    CALL get_mo_set(mos(ispin)%mo_set,mo_coeff=mo_coeff,homo=homo)
-   my_particles=>particles
-   ne = my_particles%n_els
    failure=.FALSE.
-   my_stride = 2
-   
-   ! for now, scdm_rs is called without stride input variable
-   ! This code part is for future use of stride input
-   if (present(stride)) then 
-      CPASSERT(SIZE(stride)==1.OR.SIZE(stride)==3)
-      IF (SIZE(stride)==3) THEN
-         CPASSERT(stride(1)==stride(2).AND.stride(1)==stride(3))
-      END IF  
-      my_stride = stride(1)
-   end if
-   CPASSERT(my_stride>0)
+
    ! Looping over occupied orbitals and inserting real-space values in matrix columns
    DO ivector=1,homo
+         CALL get_qs_env(qs_env=qs_env,&
+                         atomic_kind_set=atomic_kind_set,&
+                         qs_kind_set=qs_kind_set,&
+                         cell=cell,&
+                         particle_set=particle_set)
          CALL calculate_wavefunction(mo_vectors=mo_coeff,ivector=ivector,rho=wf_r,&
                  rho_gspace=wf_g,atomic_kind_set=atomic_kind_set,qs_kind_set=qs_kind_set,&
               cell=cell,dft_control=dft_control,particle_set=particle_set,&
               pw_env=pw_env)
-          omega = wf_r%pw%pw_grid%dh(1,1)*REAL(my_stride,dp)
+          !omega used for normalizing the matrix later on
+          omega = wf_r%pw%pw_grid%dh(1,1)*2
           omega = omega*omega*omega
           omega = sqrt(omega)
-          do i = 1,3
-            L(i) = wf_r%pw%pw_grid%bounds(1,i)
-            U(i) = wf_r%pw%pw_grid%bounds(2,i)
-          end do
-          IF (ivector==1) then
-            !allocate(vectors_rs_4d(L(3):U(3),L(2):U(2),L(1):U(1),homo)) 
-            !ALLOCATE(vectors_rs_2d(homo,(U(1)-L(1)+1)*(U(2)-L(2)+1)*(U(3)-L(3)+1)))
-            allocate(vectors_rs_4d((U(1)-L(1))/2+1,(U(2)-L(2))/2+1,(U(3)-L(3))/2+1,homo))
-            ALLOCATE(vectors_rs_2d(homo,((U(3)-L(3))/2+1)*((U(2)-L(2))/2+1)*((U(1)-L(1))/2+1)))
+          if (ivector == 1) then
+             !only works for serial calculation, otherwise other upper and lower boundaries
+             L(1) = wf_r%pw%pw_grid%bounds(1, 1)
+             L(2) = wf_r%pw%pw_grid%bounds(1, 2)
+             L(3) = wf_r%pw%pw_grid%bounds(1, 3)
+             U(1) = wf_r%pw%pw_grid%bounds(2, 1)
+             U(2) = wf_r%pw%pw_grid%bounds(2, 2)
+             U(3) = wf_r%pw%pw_grid%bounds(2, 3)
+            ALLOCATE(vectors_rs_2d(homo,((U(1)-L(1))/2+1)*((U(2)-L(2))/2+1)*((U(3)-L(1))/2+1)))
           END IF
-           do i=L(3),U(3),2
-             do j=L(2),U(2),2
-               do k=L(1),U(1),2
-                 ! 
-                 vectors_rs_4d((k-L(1))/2+1,(j-L(2))/2+1,(i-L(3))/2+1,ivector)=wf_r%pw%cr3d(k,j,i)
-               end do
-             end do
-           end do
-           do k=1,size(vectors_rs_4d,dim=3)
-             do j = 1,size(vectors_rs_4d,dim=2)
-               do i = 1,size(vectors_rs_4d, dim=4)
-                  if (vectors_rs_4d(i,j,k,ivector)==0) print *, i,j,k,ivector
-               end do
-             end do
-           end do
-           !vectors_rs_4d(ivector,:,:,:)=wf_r%pw%cr3d(:,:,:)
-   END DO
+          call pw_to_matrix(wf_r%pw, vectors_rs_2d, ivector)
+   end do
 
-   ! Normalize vectors_rs
-   vectors_rs_4d = vectors_rs_4d
-   vectors_rs_2d=transpose(reshape(vectors_rs_4d, (/ size(vectors_rs_4d)/homo,homo /)))
-   print *, "vectors_rs_2d: ", shape(vectors_rs_2d)
-   print *, vectors_rs_2d(1,:)
-   print *, "start scdm calculation"
-   print *, "vectors_rs_4d: ", shape(vectors_rs_4d)
+   ! Normalize orbitals
+   vectors_rs_2d = vectors_rs_2d*omega
+
    ! Allocating work variables
-   M = size(vectors_rs_2d,dim=2)
    N = size(vectors_rs_2d,dim=1)
+   M = size(vectors_rs_2d,dim=2)
    allocate(Tau(N))
    allocate(v(N))
    allocate(Work(3*M+1))
    allocate(Q(N,N))
    allocate(H(N,N))
+   allocate(jpvt(M))
+   allocate(Vtensor(N,N))
    ! Pivoted QR Decomposition of Psicon
+   jpvt = 0
    call lapack_dgeqp3(N,M,vectors_rs_2d,N,jpvt,Tau,Work,3*M+1,INFO)
    CPASSERT(INFO==0)
    do i = 1,N
@@ -230,56 +175,6 @@ CONTAINS
          Q = matmul(Q,H)
       end if
    end do
-!   Q =reshape((/-0.31355579783702092,&     
-!   3.3047567236581368E-008,&
-! -0.21242470211330930     ,&
-!  0.65234143986191861     ,&
-! -0.65599359213247133     ,&
-!  -1.5866572642068032E-008,&
-!   2.6106713597762773E-002,&
-!  0.51345916802183456     ,&
-!  -1.1944735457452070E-007,&
-!  0.76790299230214776     ,&
-!  0.30755434142152160     ,&
-! -0.19309092509172471     ,&
-!   7.3991071178379259E-008,&
-! -0.12170003659699385     ,&
-!  0.57319305435412815     ,&
-!  0.67858187094366040     ,&
-! -0.42437029397046067     ,&
-!  0.12137768656752086     ,&
-!  -1.3140837692319078E-002,&
-!  0.10642233864661235     ,&
-!   6.8229626171177837E-002,&
-!  0.54172615932574197     ,&
-! -0.71799809717192553     ,&
-! -0.40107359080949945     ,&
-!  0.11471434951865310     ,&
-!  -1.2419438850905811E-002,&
-! -0.11260400845915516     ,&
-!   6.4484016212712075E-002,&
-!   6.5930973512194166E-002,&
-! -0.11228972412989915     ,&
-!   6.8688492559553518E-002,&
-! -0.35608684886894670     ,&
-! -0.39068637722089328     ,&
-!  0.71599413201580542     ,&
-!  0.43156080592657275     ,&
-!   6.9349962933107787E-002,&
-!  0.10675389800335998     ,&
-!   7.2250510726294487E-002,&
-! -0.37455205443982248     ,&
-! -0.41094580114670282     ,&
-! -0.68069598649826357     ,&
-!  0.45393978962194220     ,&
-!  -8.2877165325514465E-002,&
-!   1.1385499303904153E-017,&
-!  0.11963412299910281     ,&
-!  0.42997902589216386     ,&
-!  0.45885627469354723     ,&
-!   5.9782336257890463E-017,&
-!  0.76379840831794654/), (/homo,homo/))     
-   print *, "Q: ", Q
    
    ! Convert Q to full matrix type
    nullify(rmat)
@@ -290,14 +185,97 @@ CONTAINS
    rmat%local_data = REAL(Q, dp)
    
    ! Calculate Phi
-   !Call rotate_orbitals(rmat,vectors)             ! Produces orthogonalized localized orbitals
    vectors%local_data = matmul(real(vectors%local_data),real(Q))
    ! Clean up
    CALL cp_fm_release(matrix=rmat)
    CALL pw_pool_give_back_pw(auxbas_pw_pool, wf_r%pw)
    CALL pw_pool_give_back_pw(auxbas_pw_pool, wf_g%pw)
-   print *, "end scdm calculations"
 
   END SUBROUTINE scdm_rs
 
-END MODULE scdm
+SUBROUTINE pw_to_matrix(pw, matrix, ivector)
+      ! Nearly identical to pw_to_cube except for the printing to a matrix instead
+      ! of a cube file (and therefore obviously no header)
+      TYPE(pw_type), POINTER                             :: pw
+      real(kind=dp), dimension(:,:)                      :: matrix
+      integer, intent(in)                                :: ivector
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'pw_to_matrix', routineP = moduleN//':'//routineN
+
+      INTEGER :: checksum, dest, gid, handle, I1, I2, I3, ip, L1, L2, L3, my_rank, &
+         my_stride(3), num_pe, rank(2), source, tag, U1, U2, U3, c
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: buf
+      CALL timeset(routineN, handle)
+      my_stride = 2
+ 
+      ! shortcut
+      L1 = pw%pw_grid%bounds(1, 1)
+      L2 = pw%pw_grid%bounds(1, 2)
+      L3 = pw%pw_grid%bounds(1, 3)
+      U1 = pw%pw_grid%bounds(2, 1)
+      U2 = pw%pw_grid%bounds(2, 2)
+      U3 = pw%pw_grid%bounds(2, 3)
+
+      ALLOCATE (buf(L3:U3))
+
+      my_rank = pw%pw_grid%para%my_pos
+      gid = pw%pw_grid%para%group
+      num_pe = pw%pw_grid%para%group_size
+      tag = 1
+      rank(2) = my_rank
+      checksum = 1
+      CALL mp_sum(checksum, gid)
+      CPASSERT(checksum == 1)
+      dest = rank(2)
+      c=1
+      DO I1 = L1, U1, my_stride(1)
+         DO I2 = L2, U2, my_stride(2)
+
+               ! cycling through the CPUs, check if the current ray (I1,I2) is local to that CPU
+               IF (pw%pw_grid%para%mode .NE. PW_MODE_LOCAL) THEN
+                  DO ip = 0, num_pe-1
+                     IF (pw%pw_grid%para%bo(1, 1, ip, 1) <= I1-L1+1 .AND. pw%pw_grid%para%bo(2, 1, ip, 1) >= I1-L1+1 .AND. &
+                         pw%pw_grid%para%bo(1, 2, ip, 1) <= I2-L2+1 .AND. pw%pw_grid%para%bo(2, 2, ip, 1) >= I2-L2+1) THEN
+                        source = ip
+                     ENDIF
+                  ENDDO
+               ELSE
+                  source = dest
+               ENDIF
+
+               IF (source == dest) THEN
+                  IF (my_rank == source) THEN
+                     buf(:) = pw%cr3d(I1, I2, :)
+                  ENDIF
+               ELSE
+                  IF (my_rank == source) THEN
+                     buf(:) = pw%cr3d(I1, I2, :)
+                     CALL mp_send(buf, dest, tag, gid)
+                  ENDIF
+                  IF (my_rank == dest) THEN
+                     CALL mp_recv(buf, source, tag, gid)
+                  ENDIF
+               ENDIF
+               do I3 = L3,U3,my_stride(3)
+                  matrix(ivector,c) = buf(I3)
+                  c = c+1 
+               end do
+
+               ! this double loop generates so many messages that it can overload
+               ! the message passing system, e.g. on XT3
+               ! we therefore put a barrier here that limits the amount of message
+               ! that flies around at any given time.
+               ! if ever this routine becomes a bottleneck, we should go for a
+               ! more complicated rewrite
+               CALL mp_sync(gid)
+
+         ENDDO
+      ENDDO
+
+      DEALLOCATE (buf)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE pw_to_matrix
+end module scdm
+
