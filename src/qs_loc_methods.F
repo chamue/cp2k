@@ -140,8 +140,8 @@ CONTAINS
 !>       optimization routines are specific for this case
 !>       The file for the centers and the spreads have a xyz format
 ! **************************************************************************************************
-   SUBROUTINE optimize_loc_berry(method, qs_loc_env, vectors, op_sm_set, qs_env, &
-                                 zij_fm_set, para_env, cell, weights, ispin, print_loc_section)
+   SUBROUTINE optimize_loc_berry(method, qs_loc_env, vectors, op_sm_set, &
+                                         zij_fm_set, para_env, cell, weights, ispin, print_loc_section)
 
       INTEGER, INTENT(IN)                                :: method
       TYPE(qs_loc_env_new_type), POINTER                 :: qs_loc_env
@@ -153,7 +153,6 @@ CONTAINS
       REAL(dp), DIMENSION(:)                             :: weights
       INTEGER, INTENT(IN)                                :: ispin
       TYPE(section_vals_type), POINTER                   :: print_loc_section
-      TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CHARACTER(len=*), PARAMETER :: routineN = 'optimize_loc_berry', &
          routineP = moduleN//':'//routineN
@@ -241,7 +240,7 @@ CONTAINS
             ENDDO
          END IF
       CASE (do_loc_scdm)
-         CALL scdm_rs(qs_env=qs_env, zij=zij_fm_set, vectors=vectors, ispin=ispin)
+         CALL scdm_rs(vectors)
          ! here we need to set zij for the computation of the centers and spreads
             DO i = 1, SIZE(zij_fm_set, 2)
                DO j = 1, SIZE(zij_fm_set, 1)
@@ -254,9 +253,9 @@ CONTAINS
             WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
          CALL centers_spreads_berry(qs_loc_env,zij_fm_set,nmoloc,cell,weights, &
                  ispin, print_loc_section)
-         CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
-              eps_localization=eps_localization, sweeps=sweeps, &
-              out_each=out_each, target_time=target_time, start_time=start_time)
+        ! CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
+        !      eps_localization=eps_localization, sweeps=sweeps, &
+        !      out_each=out_each, target_time=target_time, start_time=start_time)
       CASE (do_loc_none)
          IF (output_unit > 0) THEN
             WRITE (output_unit, '(T4,A,I6,A)') " No MOS localization applied "
@@ -692,7 +691,7 @@ CONTAINS
             CALL cp_fm_struct_release(tmp_fm_struct)
 
             CALL optimize_loc_berry(loc_method, qs_loc_env, moloc_coeff(ispin)%matrix, op_sm_set, &
-                                    qs_env, op_fm_set, para_env, cell, weights, ispin, print_loc_section)
+                                    op_fm_set, para_env, cell, weights, ispin, print_loc_section)
             ! Here we dealloctate op_fm_set
             IF (ASSOCIATED(op_fm_set)) THEN
                DO i = 1, dim_op
