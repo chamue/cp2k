@@ -159,7 +159,7 @@ CONTAINS
 
       INTEGER                                            :: handle, i, j, max_iter, nao, nmoloc, &
                                                             out_each, output_unit, sweeps
-      LOGICAL                                            :: converged, crazy_use_diag
+      LOGICAL                                            :: converged, crazy_use_diag, sample
       REAL(dp)                                           :: crazy_scale, eps_localization, &
                                                             max_crazy_angle, start_time, &
                                                             target_time
@@ -191,6 +191,8 @@ CONTAINS
       max_crazy_angle = qs_loc_env%localized_wfn_control%max_crazy_angle
       crazy_use_diag = qs_loc_env%localized_wfn_control%crazy_use_diag
       crazy_scale = qs_loc_env%localized_wfn_control%crazy_scale
+      ! used for random sampling scdm
+      sample = qs_loc_env%localized_wfn_control%sample
       eps_localization = qs_loc_env%localized_wfn_control%eps_localization
       out_each = qs_loc_env%localized_wfn_control%out_each
       target_time = qs_loc_env%target_time
@@ -240,7 +242,7 @@ CONTAINS
             ENDDO
          END IF
       CASE (do_loc_scdm)
-         CALL scdm_rs(vectors)
+         CALL scdm_rs(vectors,sample,eps_localization)
          ! here we need to set zij for the computation of the centers and spreads
             DO i = 1, SIZE(zij_fm_set, 2)
                DO j = 1, SIZE(zij_fm_set, 1)
@@ -253,9 +255,9 @@ CONTAINS
             WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
          CALL centers_spreads_berry(qs_loc_env,zij_fm_set,nmoloc,cell,weights, &
                  ispin, print_loc_section)
-        ! CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
-        !      eps_localization=eps_localization, sweeps=sweeps, &
-        !      out_each=out_each, target_time=target_time, start_time=start_time)
+         CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
+              eps_localization=eps_localization, sweeps=sweeps, &
+              out_each=out_each, target_time=target_time, start_time=start_time)
       CASE (do_loc_none)
          IF (output_unit > 0) THEN
             WRITE (output_unit, '(T4,A,I6,A)') " No MOS localization applied "

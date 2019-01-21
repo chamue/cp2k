@@ -676,6 +676,15 @@ CONTAINS
          default_i_val=do_loc_jacobi)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
+      
+      ! Introducing keyword concerning sampling scdm technique
+      CALL keyword_create(keyword, name="SAMPLE", &
+                          description="Use faster scdm algorithm by sampling orbitals",&
+                          usage="SAMPLE", default_l_val=.FALSE.,&
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+      ! Done introducing keyword concerning sampling scdm technique
 
       CALL keyword_create(keyword, name="JACOBI_FALLBACK", &
                           description="Use Jacobi method in case no convergence was achieved"// &

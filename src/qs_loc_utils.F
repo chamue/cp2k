@@ -1467,6 +1467,9 @@ CONTAINS
                                    l_val=localized_wfn_control%jacobi_fallback)
          CALL section_vals_val_get(loc_section, "METHOD", &
                                    i_val=localized_wfn_control%localization_method)
+         ! Used for scdm random sample
+         CALL section_vals_val_get(loc_section, "SAMPLE", &
+                                   l_val=localized_wfn_control%sample)
          CALL section_vals_val_get(loc_section, "OPERATOR", &
                                    i_val=localized_wfn_control%operator_type)
          CALL section_vals_val_get(loc_section, "RESTART", &
@@ -1651,6 +1654,8 @@ CONTAINS
             CASE (do_loc_scdm)
                WRITE(UNIT=output_unit, FMT="(T2,A)") &
                   "LOCALIZE| Pivoted QR decomposition is used to get first guess for Jacobi method"
+               WRITE (UNIT=output_unit, FMT="(T2,A,L1)") &
+                  "LOCALIZE| use random sampling:", localized_wfn_control%sample
             END SELECT
 
          END IF ! process has output_unit

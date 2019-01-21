@@ -136,6 +136,8 @@ MODULE qs_loc_types
       REAL(KIND=dp)                        :: eps_occ
       REAL(KIND=dp), DIMENSION(2)          :: lu_ene_bound
       LOGICAL                              :: crazy_use_diag
+      ! For SCDM random sampling
+      LOGICAL                              :: sample 
       LOGICAL                              :: print_cubes, jacobi_fallback
       LOGICAL                              :: print_centers
       LOGICAL                              :: print_spreads

@@ -32,23 +32,62 @@ CONTAINS
 !> \param weights: root of volume of single voxel (in realspace)
 !>
 ! *****************************************************************************
-  SUBROUTINE scdm_rs(vectors)
+  SUBROUTINE scdm_rs(vectors, sample, eps)
    ! Input Variables
    TYPE(cp_fm_type), POINTER                     :: vectors
+   logical, intent(in)                           :: sample
+   real(dp), intent(in), optional                :: eps
 
    ! Working Variables
    integer                                       :: i, j, k, INFO, M, N, handle
    real(kind=dp), allocatable, dimension(:,:)    :: Q, H, Vtensor,CT
-   real(kind=dp), allocatable, dimension(:)      :: Tau, v, Work
+   real(kind=dp), allocatable, dimension(:)      :: Tau, v, Work, roh, rohsum
    integer, allocatable, dimension(:)            :: jpvt 
+   integer, dimension(100,1)                     :: C
+   real, dimension(100)                          :: U
    CHARACTER(len=*), PARAMETER :: routineN = 'scdm_rs', &
            routineP = moduleN//':'//routineN
 
    CALL timeset(routineN, handle)
-   
-   ! Allocating work variables
    N = size(vectors%local_data,dim=2)
    M = size(vectors%local_data,dim=1)
+   allocate(roh(M))
+   allocate(rohsum(M))
+   if (sample) then
+     ! Calculate probability distribution
+     print *, "Here"
+     do i = 1,M
+       roh(i) = 0
+       do j = 1,N
+         roh(i) = roh(i)+vectors%local_data(i,j)*vectors%local_data(i,j)
+       end do
+       if (i == 1) then
+         rohsum(i) = roh(i)
+       else 
+         rohsum(i) = rohsum(i-1) + roh(i)
+       end if 
+     end do
+     print *, rohsum(M)
+     rohsum = rohsum/rohsum(M)
+     ! Random Sample
+     call random_number(U)
+     C = 0
+     do i = 1,size(U)
+       do j = 1, size(roh)
+         if (rohsum(j-1) <= U(i) .AND. U(i) <= rohsum(j) .AND. C(i,1) == 0) then
+           C(i,1) = j
+           exit
+         end if
+       end do
+     end do
+     M = 100
+     allocate(CT(N,M))
+     CT = transpose(vectors%local_data(C(:,1),:))
+   else 
+     allocate(CT(N,M))
+     CT = transpose(vectors%local_data)  
+   end if 
+   ! Allocating work variables
    allocate(Tau(N))
    allocate(v(N))
    allocate(Work(3*M+1))
@@ -56,10 +95,9 @@ CONTAINS
    allocate(H(N,N))
    allocate(jpvt(M))
    allocate(Vtensor(N,N))
-   allocate(CT(N,M))
+  
    ! Pivoted QR Decomposition of Psicon
    jpvt = 0
-   CT = transpose(vectors%local_data)
    call lapack_dgeqp3(N,M,CT,N,jpvt,Tau,Work,3*M+1,INFO)
    CPASSERT(INFO==0)
 
