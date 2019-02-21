@@ -1,0 +1,19 @@
+CC          = gcc
+CXX         = g++
+CPP         =
+AR          = ar -r
+FC          = gfortran
+LD          = gfortran
+#
+DFLAGS      = -D__LIBXSMM   -D__FFTW3  -D__LIBINT -D__LIBINT_MAX_AM=6 -D__LIBDERIV_MAX_AM1=5 -D__LIBXC    -D__SPGLIB   -D__JSON  
+#
+WFLAGS      = -Werror=aliasing -Werror=ampersand -Werror=c-binding-type -Werror=intrinsic-shadow -Werror=intrinsics-std -Werror=line-truncation -Werror=tabs -Werror=target-lifetime -Werror=underflow -Werror=unused-but-set-variable -Werror=unused-variable -Werror=unused-dummy-argument -Werror=conversion -Werror=zerotrip -Werror=uninitialized -Wno-maybe-uninitialized -Wuse-without-only 
+#
+FCDEBFLAGS  = -ffree-form -std=f2003 -fimplicit-none 
+CFLAGS      = -march=native -fno-omit-frame-pointer -g  -O3 -funroll-loops -ffast-math $(PROFOPT)    -I'/data/cmueller/cp2k/tools/toolchain/install/openblas-0.3.5/include' -I'/data/cmueller/cp2k/tools/toolchain/install/fftw-3.3.8/include' -I'/data/cmueller/cp2k/tools/toolchain/install/libint-1.1.6/include' -I'/data/cmueller/cp2k/tools/toolchain/install/libxc-4.3.0/include' -I'/data/cmueller/cp2k/tools/toolchain/install/libxsmm-1.10.0/include'  -I'/data/cmueller/cp2k/tools/toolchain/install/gsl-2.5/include' -I/data/cmueller/cp2k/tools/toolchain/install/spglib-1.12.1/include -I/data/cmueller/cp2k/tools/toolchain/install/hdf5-1.10.4/include  -I'/data/cmueller/cp2k/tools/toolchain/install/json_fortran-7.0.0/include' $(DFLAGS)
+FCFLAGS     = -march=native -fno-omit-frame-pointer -g  -O3 -funroll-loops -ffast-math $(PROFOPT)    -I'/data/cmueller/cp2k/tools/toolchain/install/openblas-0.3.5/include' -I'/data/cmueller/cp2k/tools/toolchain/install/fftw-3.3.8/include' -I'/data/cmueller/cp2k/tools/toolchain/install/libint-1.1.6/include' -I'/data/cmueller/cp2k/tools/toolchain/install/libxc-4.3.0/include' -I'/data/cmueller/cp2k/tools/toolchain/install/libxsmm-1.10.0/include'  -I'/data/cmueller/cp2k/tools/toolchain/install/gsl-2.5/include' -I/data/cmueller/cp2k/tools/toolchain/install/spglib-1.12.1/include -I/data/cmueller/cp2k/tools/toolchain/install/hdf5-1.10.4/include  -I'/data/cmueller/cp2k/tools/toolchain/install/json_fortran-7.0.0/include' $(FCDEBFLAGS) $(WFLAGS) $(DFLAGS)
+#
+LDFLAGS     = $(FCFLAGS) -Wl,--enable-new-dtags   -L'/data/cmueller/cp2k/tools/toolchain/install/openblas-0.3.5/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/openblas-0.3.5/lib' -L'/data/cmueller/cp2k/tools/toolchain/install/fftw-3.3.8/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/fftw-3.3.8/lib' -L'/data/cmueller/cp2k/tools/toolchain/install/libint-1.1.6/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/libint-1.1.6/lib' -L'/data/cmueller/cp2k/tools/toolchain/install/libxc-4.3.0/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/libxc-4.3.0/lib' -L'/data/cmueller/cp2k/tools/toolchain/install/libxsmm-1.10.0/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/libxsmm-1.10.0/lib'   -L'/data/cmueller/cp2k/tools/toolchain/install/gsl-2.5/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/gsl-2.5/lib' -L'/data/cmueller/cp2k/tools/toolchain/install/spglib-1.12.1/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/spglib-1.12.1/lib' -L'/data/cmueller/cp2k/tools/toolchain/install/hdf5-1.10.4/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/hdf5-1.10.4/lib'  -L'/data/cmueller/cp2k/tools/toolchain/install/json_fortran-7.0.0/lib' -Wl,-rpath='/data/cmueller/cp2k/tools/toolchain/install/json_fortran-7.0.0/lib'
+LIBS        = -ljsonfortran   -lsymspg    -lxsmmf -lxsmm -ldl -lpthread -lxcf03 -lxc -Wl,-Bstatic -lderiv -lint -Wl,-Bdynamic -lfftw3     -lopenblas -lstdc++
+#
+FYPPFLAGS   = -n --line-marker-format=gfortran5

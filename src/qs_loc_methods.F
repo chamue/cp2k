@@ -242,7 +242,7 @@ CONTAINS
             ENDDO
          END IF
       CASE (do_loc_scdm)
-         CALL scdm_rs(vectors,sample,eps_localization)
+         CALL scdm_rs(vectors, para_env, sample)
          ! here we need to set zij for the computation of the centers and spreads
             DO i = 1, SIZE(zij_fm_set, 2)
                DO j = 1, SIZE(zij_fm_set, 1)
@@ -252,7 +252,9 @@ CONTAINS
                                zij_fm_set(j, i)%matrix)
                ENDDO
             ENDDO
-            WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
+            if (output_unit > 0) then
+               WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
+            end if
          CALL centers_spreads_berry(qs_loc_env,zij_fm_set,nmoloc,cell,weights, &
                  ispin, print_loc_section)
          CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
