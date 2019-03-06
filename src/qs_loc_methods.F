@@ -47,7 +47,7 @@ MODULE qs_loc_methods
    USE cp_units,                        ONLY: cp_unit_from_cp2k
    USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_constants,                 ONLY: &
-           do_loc_crazy, do_loc_direct, do_loc_jacobi, do_loc_l1_norm_sd, do_loc_scdm, do_loc_none,&
+           do_loc_crazy, do_loc_direct, do_loc_jacobi, do_loc_l1_norm_sd, do_loc_scdm, do_loc_scdmjacobi, do_loc_none,&
            dump_dcd,dump_dcd_aligned_cell, dump_xmol, op_loc_berry, op_loc_boys, op_loc_pipek, state_loc_list
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_ivals,&
@@ -99,6 +99,7 @@ MODULE qs_loc_methods
                                               qs_subsys_type
    USE string_utilities,                ONLY: xstring
    USE scdm,                            ONLY: scdm_rs
+   USE machine,                         ONLY: m_walltime
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -162,7 +163,7 @@ CONTAINS
       LOGICAL                                            :: converged, crazy_use_diag, sample
       REAL(dp)                                           :: crazy_scale, eps_localization, &
                                                             max_crazy_angle, start_time, &
-                                                            target_time
+                                                            target_time, t1, t2
       TYPE(cp_fm_type), POINTER                          :: opvec
       TYPE(cp_logger_type), POINTER                      :: logger
 
@@ -201,9 +202,12 @@ CONTAINS
                                  ispin, print_loc_section, only_initial_out=.TRUE.)
       SELECT CASE (method)
       CASE (do_loc_jacobi)
+         t1=m_walltime()
          CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
                                eps_localization=eps_localization, sweeps=sweeps, &
                                out_each=out_each, target_time=target_time, start_time=start_time)
+         t2=m_walltime()
+         if (output_unit > 0) WRITE(output_unit, '(T4,A,F15.3)') "  Time: ", t2-t1
       CASE (do_loc_crazy)
          CALL crazy_rotations(weights, zij_fm_set, vectors, max_iter=max_iter, max_crazy_angle=max_crazy_angle, &
                               crazy_scale=crazy_scale, crazy_use_diag=crazy_use_diag, &
@@ -241,7 +245,8 @@ CONTAINS
                ENDDO
             ENDDO
          END IF
-      CASE (do_loc_scdm)
+      CASE (do_loc_scdmjacobi)
+         t1=m_walltime()
          CALL scdm_rs(vectors, para_env, sample)
          ! here we need to set zij for the computation of the centers and spreads
             DO i = 1, SIZE(zij_fm_set, 2)
@@ -252,14 +257,36 @@ CONTAINS
                                zij_fm_set(j, i)%matrix)
                ENDDO
             ENDDO
+         t2=m_walltime()
             if (output_unit > 0) then
                WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
             end if
          CALL centers_spreads_berry(qs_loc_env,zij_fm_set,nmoloc,cell,weights, &
                  ispin, print_loc_section)
+         if (output_unit > 0) WRITE(output_unit, '(T4,A,F15.3)') "  Time SCDM: ", t2-t1
+         t1=m_walltime()
          CALL jacobi_rotations(weights, zij_fm_set, vectors, para_env, max_iter=max_iter, &
               eps_localization=eps_localization, sweeps=sweeps, &
               out_each=out_each, target_time=target_time, start_time=start_time)
+         t2=m_walltime()
+         if (output_unit > 0) WRITE(output_unit, '(T4,A,F15.3)') "  Time Jacobi: ", t2-t1  
+       CASE (do_loc_scdm)
+         t1=m_walltime()
+         CALL scdm_rs(vectors, para_env, sample)
+         ! here we need to set zij for the computation of the centers and spreads
+            DO i = 1, SIZE(zij_fm_set, 2)
+               DO j = 1, SIZE(zij_fm_set, 1)
+                  CALL cp_fm_set_all(zij_fm_set(j, i)%matrix, 0.0_dp)
+                  CALL cp_dbcsr_sm_fm_multiply(op_sm_set(j, i)%matrix, vectors, opvec, ncol=nmoloc)
+                  CALL cp_gemm("T", "N", nmoloc, nmoloc, nao, 1.0_dp, vectors, opvec, 0.0_dp, &
+                               zij_fm_set(j, i)%matrix)
+               ENDDO
+            ENDDO
+         t2=m_walltime()
+            if (output_unit > 0) then
+               WRITE (output_unit, '(T4,A )') " Rough Localization by SCDM"
+               WRITE(output_unit, '(T4,A,F15.3)') "  Time: ", t2-t1
+            end if
       CASE (do_loc_none)
          IF (output_unit > 0) THEN
             WRITE (output_unit, '(T4,A,I6,A)') " No MOS localization applied "

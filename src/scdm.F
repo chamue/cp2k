@@ -61,7 +61,7 @@ CONTAINS
 #endif
    integer                                       :: i, j, k, INFO, M, N, handle !, lld
    real(kind=dp)                                 :: norm
-   real(kind=dp), allocatable, dimension(:,:)    :: Q, H, CTs, Vtensor, normmat, v
+   real(kind=dp), allocatable, dimension(:,:)    :: Q, H, CTs, normmat !, v, Vtensor
    real(kind=dp), allocatable, dimension(:)      :: Tau, Work, roh, rohsum, U
    integer, allocatable, dimension(:)            :: jpvt 
    integer, allocatable, dimension(:,:)          :: C
@@ -69,7 +69,6 @@ CONTAINS
            routineP = moduleN//':'//routineN
 
    CALL timeset(routineN, handle)
-!   if (para_env%num_pe==1) then
    if (para_env%num_pe==1) then
         N = size(vectors%local_data,dim=2)
         M = size(vectors%local_data,dim=1)
@@ -101,8 +100,6 @@ CONTAINS
            end do
            rohsum = rohsum/rohsum(M)
            ! Random Sample
-           !print *, "Norm: ", norm, "roh(M): ", roh(M)
-           !print *, "N: ", N, "M: ", M, "M to be: ", ceiling(3*norm*log(real(N)))
            M=ceiling(3*N*log(real(N)))
            allocate(C(M,1))
            allocate(U(M))
@@ -130,42 +127,41 @@ CONTAINS
  
         ! Allocating work variables
         allocate(Tau(N))
-        allocate(v(N,1))
         allocate(Work(3*M+1))
         allocate(Q(N,N))
         allocate(H(N,N))
         allocate(jpvt(M))
-        allocate(Vtensor(N,N))
   
         ! Pivoted QR Decomposition of Psicon
         jpvt = 0
         call lapack_dgeqp3(N,M,CTs,N,jpvt,Tau,Work,3*M+1,INFO)
-        !call dgeqrf(N,M,CTs,N,Tau,Work,3*M+1,INFO)
         CPASSERT(INFO==0)
-        !print *, "Tau: "
-        !do i=1,N
-        !   print *, tau(i)
-        !end do
-
 
         ! Construction of Q from the lapack output
         do i = 1,N
-          H = 0
-          v(1:i-1,1)=0
-          v(i,1)=1
-          v(i+1:N,1)=CTs(i+1:N,i)
-     !     print *, "i, v:", i, ":", v
           do j = 1,N
-            H(j,j)=1
-            do k = 1,N
-              Vtensor(j,k) = v(j,1)*v(k,1)
+            do k=j,N
+               if (j==k .and. j<i) then
+                    H(j,k)=1.0_dp
+               else if (j==k .and. j==i) then
+                    H(j,k)=1.0_dp - tau(i)
+               else if (j==k .and. j>i) then
+                    H(j,k)=1.0_dp - tau(i)*CTs(j,i)*CTs(j,i)
+               else if (j/=k .and. j==i .and. k>i) then
+                    H(j,k)=-tau(i)*CTs(k,i)
+                    H(k,j)=H(j,k)
+               else if (j/=k .and. j>i .and. k>i) then
+                    H(j,k)=-tau(i)*CTs(k,i)*CTs(j,i)
+                    H(k,j)=H(j,k)
+               else
+                    H(k,j)=0.0_dp
+                    H(j,k)=0.0_dp  
+               end if 
             end do
           end do
-          H = H - Tau(i)*Vtensor
           if (i == 1) then
             Q = H
           else
-            !print *, "Q*H: Q:", shape(Q), "H:", shape(H)
             Q = matmul(Q,H)
           end if
         end do
@@ -176,12 +172,9 @@ CONTAINS
         ! Clean up
         deallocate(CTs)
         deallocate(Tau)
-        deallocate(v)
         deallocate(Work)
         deallocate(Q)
         deallocate(H)
-        deallocate(Vtensor)
-
 
    else
    ! parallel version, no sampling 
@@ -202,10 +195,8 @@ CONTAINS
                 0.0_dp,CTp%local_data(1,1),1,1,descc)
         
         ! Allocating work variables
-        allocate(v(N,1))
         allocate(Q(N,N))
         allocate(H(N,N))
-        allocate(Vtensor(N,N))
         a => CTp%local_data
         ndim = size(a,2)
         allocate(tau(N))
@@ -220,49 +211,37 @@ CONTAINS
         allocate(work(lwork))
         tau=0
         ipiv=0
-        !allocate(matrix(N,M))
-        !call cp_fm_get_submatrix(CTp, matrix, 1, 1, N, M)
-        !if (para_env%mepos==1) then
-        !    print *, "CTp before pdgeqpf: "
-        !    do i=1,N
-        !      do j=1,N
-        !        print *, matrix(i,j)
-        !      end do
-        !    end do
-        !end if
         call pdgeqpf(n,m,a,1,1,descc,ipiv, tau,work,lwork,info)
         CPASSERT(INFO==0)
-        !deallocate(matrix)
-        !allocate(matrix(N,M))
-        !call cp_fm_get_submatrix(CTp, matrix, 1, 1, N, M)
-        !if (para_env%mepos==0) then
-        !    print *, "CTp after pdgeqpf: "
-        !    do i=1,N
-        !      do j=1,N
-        !        print *, matrix(i,j)
-        !      end do
-        !    end do
-        !end if
         ! Construction of Q from the scalapack output (should also be parallelized
         ! in the future)
         if (para_env%mepos==0 .and. all(tau==0)) then
           CPABORT("tau 0 for process 0")
         end if
         call mp_bcast(msg=tau,source=0,gid=para_env%group)
-        !print *, "Processor ", para_env%mepos, " tau:", tau(1:7)
-        d19.3227035298o i = 1,N
-          H = 0.0_dp
-          v=0.0_dp         
-          call cp_fm_get_submatrix(CTp,v(i+1:N,:),i+1,i,N-i,1)
-          v(i,1)=1.0_dp
-          !print *, "Processor ", para_env%mepos, ":", v
-          do j = 1,N
-            H(j,j)=1
-            do k = 1,N
-              Vtensor(j,k) = v(j,1)*v(k,1)
+        allocate(matrix(N,N))
+        call cp_fm_get_submatrix(CTp, matrix,1,1,N,N)
+        do i = 1,N
+          do j=1,N
+            do k=j,N
+               if (j==k .and. j<i) then
+                    H(j,k)=1.0_dp
+               else if (j==k .and. j==i) then
+                    H(j,k)=1.0_dp - tau(i)
+               else if (j==k .and. j>i) then
+                    H(j,k)=1.0_dp - tau(i)*matrix(j,i)*matrix(j,i)
+               else if (j/=k .and. j==i .and. k>i) then
+                    H(j,k)=-tau(i)*matrix(k,i)
+                    H(k,j)=H(j,k)
+               else if (j/=k .and. j>i .and. k>i) then
+                    H(j,k)=-tau(i)*matrix(k,i)*matrix(j,i)
+                    H(k,j)=H(j,k)
+               else
+                    H(k,j)=0.0_dp
+                    H(j,k)=0.0_dp
+               end if
             end do
           end do
-          H = H - Tau(i)*Vtensor
           if (i == 1) then
             Q = H
           else
@@ -297,9 +276,8 @@ CONTAINS
         deallocate(work)
         deallocate(Q)
         deallocate(H)
-        deallocate(vtensor)
-        deallocate(v)
         deallocate(ipiv)
+        deallocate(matrix)
 
 #else
         CPABORT("pdgeqrf() called without SCALAPACK compiled in")
@@ -309,4 +287,3 @@ CONTAINS
    
   END SUBROUTINE scdm_rs
 end module scdm
-
