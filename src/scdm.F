@@ -13,19 +13,16 @@
 ! *****************************************************************************
 MODULE scdm
    USE cp_fm_types,                      ONLY: cp_fm_type,&
-                                               cp_fm_set_element, &
                                                cp_fm_to_fm, &
                                                cp_fm_create, &
-                                               cp_fm_get_submatrix, &
-                                               cp_fm_release
+                                               cp_fm_release, &
+                                               cp_fm_to_fm_submat
    USE cp_fm_struct,                     ONLY: cp_fm_struct_type, &
                                                cp_fm_struct_create, &
                                                cp_fm_struct_release
    USE lapack,                           ONLY: lapack_dgeqp3
    USE kinds,                            ONLY: dp
    USE cp_fm_basic_linalg,               ONLY: cp_fm_gemm                                  
-   USE cp_para_types,                    ONLY: cp_para_env_type    
-   USE message_passing,                  ONLY: mp_bcast   
 #include "./base/base_uses.f90"
   
   IMPLICIT NONE
@@ -42,37 +39,99 @@ CONTAINS
 !> \param weights: root of volume of single voxel (in realspace)
 !>
 ! *****************************************************************************
-  SUBROUTINE scdm_rs(vectors, para_env, sample)
+  SUBROUTINE scdm_rs(vectors, sample)
    ! Input Variables
    TYPE(cp_fm_type), POINTER                     :: vectors
-   TYPE(cp_para_env_type), POINTER               :: para_env
    logical, intent(in)                           :: sample
-   !real(dp), intent(in), optional                :: eps
 
    ! Working Variables
 #if defined(__SCALAPACK)
-   type(cp_fm_type), pointer                     :: CTp, Qf, tmp
+   integer                                       :: INFO, M, N, handle
+   real(kind=dp), allocatable, dimension(:)      :: Tau, Work
+   type(cp_fm_type), pointer                     :: CTp, tmp, Qf
    INTEGER, DIMENSION(9)                         :: descc
-   integer                                       :: lwork, ndim
+   integer                                       :: lwork
    type(cp_fm_struct_type), pointer              :: cstruct
    real(kind=dp), dimension(:,:), pointer        :: a
-   real(kind=dp), allocatable,  dimension(:,:)   :: matrix
    integer, allocatable, dimension(:)            :: ipiv
-#endif
-   integer                                       :: i, j, k, INFO, M, N, handle !, lld
+#else
+   integer                                       :: i, j, lwork, INFO, M, N, handle
    real(kind=dp)                                 :: norm
-   real(kind=dp), allocatable, dimension(:,:)    :: Q, H, CTs, normmat !, v, Vtensor
+   real(kind=dp), allocatable, dimension(:,:)    :: CTs, normmat 
    real(kind=dp), allocatable, dimension(:)      :: Tau, Work, roh, rohsum, U
    integer, allocatable, dimension(:)            :: jpvt 
    integer, allocatable, dimension(:,:)          :: C
+#endif
    CHARACTER(len=*), PARAMETER :: routineN = 'scdm_rs', &
            routineP = moduleN//':'//routineN
-
    CALL timeset(routineN, handle)
-   if (para_env%num_pe==1) then
+#if defined(__SCALAPACK)
+        if (sample) then
+           CPABORT("Sampling only defined for serial version")
+        end if
+        ! Create Transpose of Coefficient Matrix vectors
+        N = vectors%matrix_struct%ncol_global
+        M = vectors%matrix_struct%nrow_global
+        call cp_fm_struct_create(cstruct, vectors%matrix_struct%para_env, &
+                vectors%matrix_struct%context, N, M, vectors%matrix_struct%ncol_block, &
+                vectors%matrix_struct%nrow_block, first_p_pos=vectors%matrix_struct%first_p_pos)
+        descc(:)=cstruct%descriptor(:)
+        call cp_fm_create(CTp,cstruct)
+        call pdtran(N,M,1.0_dp,vectors%local_data(1,1),1,1,vectors%matrix_struct%descriptor,&
+                0.0_dp,CTp%local_data(1,1),1,1,descc)
+
+        ! Prepare work variables
+        a => CTp%local_data
+        allocate(tau(N))
+        lwork=-1
+        allocate(work(2*N))
+        allocate(ipiv(M))
+        
+        ! Call SCALAPACK routine to get optimal work dimension
+        call pdgeqpf(n,m,a,1,1,descc,ipiv,tau,work,lwork,info)
+        lwork=INT(work(1))
+        deallocate(work)
+        allocate(work(lwork))
+        tau=0.0_dp
+        ipiv=0
+        ! Call SCALAPACK routine to get QR decomposition of CTs
+        call pdgeqpf(n,m,a,1,1,descc,ipiv, tau,work,lwork,info)
+        CPASSERT(INFO==0)
+
+        ! Construction of Q from the scalapack output
+        call cp_fm_struct_release(cstruct)
+        call cp_fm_struct_create(cstruct,para_env=CTp%matrix_struct%para_env, &
+                context=CTp%matrix_struct%context, nrow_global=CTp%matrix_struct%nrow_global, &
+                ncol_global=CTp%matrix_struct%nrow_global)
+        call cp_fm_create(Qf,cstruct)
+        call cp_fm_to_fm_submat(CTp,Qf,N,N,1,1,1,1)
+        a => Qf%local_data
+        lwork=-1
+        ! Call SCALAPACK routine to get optimal work dimension
+        call pdorgqr(n,n,n,a,1,1,descc,tau,work,lwork,info)
+        CPASSERT(info==0)
+        lwork=int(work(1))
+        deallocate(work)
+        allocate(work(lwork))
+        ! Call SCALAPACK routine to get Q 
+        call pdorgqr(n,n,n,a,1,1,descc,tau,work,lwork,info)
+        CPASSERT(info==0)
+
+        ! Transform original coefficient matrix vectors
+        call cp_fm_create(tmp,vectors%matrix_struct)
+        call cp_fm_to_fm(vectors, tmp)
+        call cp_fm_gemm('N','N',M,N,N,1.0_dp,tmp,Qf,0.0_dp,vectors)
+        
+        ! Clean up
+        call cp_fm_struct_release(cstruct)
+        call cp_fm_release(CTp)
+        call cp_fm_release(Qf)
+        deallocate(tau)
+        deallocate(work)
+        deallocate(ipiv)
+#else
         N = size(vectors%local_data,dim=2)
         M = size(vectors%local_data,dim=1)
-        !print *, "N: ", N, ", M: ", M
         ! This sampling is unnecessary when working with the coefficient matrix
         ! It was created for the case when working in realspace
         ! Maybe use the sample keyword in the future to see if BS should be 
@@ -91,12 +150,12 @@ CONTAINS
              roh(i) = 0
              do j = 1,N
                roh(i) = roh(i)+vectors%local_data(i,j)*vectors%local_data(i,j)
-             end do   
+             end do
              if (i == 1) then
                rohsum(i) = roh(i)
-             else 
+             else
                rohsum(i) = rohsum(i-1) + roh(i)
-             end if 
+             end if
            end do
            rohsum = rohsum/rohsum(M)
            ! Random Sample
@@ -120,170 +179,38 @@ CONTAINS
            deallocate(normmat)
            deallocate(rohsum)
            deallocate(roh)
-        else 
+        else
            allocate(CTs(N,M))
-           CTs = transpose(vectors%local_data)  
+           CTs = transpose(vectors%local_data)
         end if
- 
+
         ! Allocating work variables
         allocate(Tau(N))
         allocate(Work(3*M+1))
-        allocate(Q(N,N))
-        allocate(H(N,N))
         allocate(jpvt(M))
-  
+
         ! Pivoted QR Decomposition of Psicon
         jpvt = 0
         call lapack_dgeqp3(N,M,CTs,N,jpvt,Tau,Work,3*M+1,INFO)
         CPASSERT(INFO==0)
-
-        ! Construction of Q from the lapack output
-        do i = 1,N
-          do j = 1,N
-            do k=j,N
-               if (j==k .and. j<i) then
-                    H(j,k)=1.0_dp
-               else if (j==k .and. j==i) then
-                    H(j,k)=1.0_dp - tau(i)
-               else if (j==k .and. j>i) then
-                    H(j,k)=1.0_dp - tau(i)*CTs(j,i)*CTs(j,i)
-               else if (j/=k .and. j==i .and. k>i) then
-                    H(j,k)=-tau(i)*CTs(k,i)
-                    H(k,j)=H(j,k)
-               else if (j/=k .and. j>i .and. k>i) then
-                    H(j,k)=-tau(i)*CTs(k,i)*CTs(j,i)
-                    H(k,j)=H(j,k)
-               else
-                    H(k,j)=0.0_dp
-                    H(j,k)=0.0_dp  
-               end if 
-            end do
-          end do
-          if (i == 1) then
-            Q = H
-          else
-            Q = matmul(Q,H)
-          end if
-        end do
-        deallocate(jpvt)
-        ! Calculate localized orbitals
-        vectors%local_data = matmul(real(vectors%local_data),real(Q))
+        ! Get Q from QR output
+        call dorgqr(N,N,N,CTs(1:N,1:N),N,Tau,work,-1,info)
+        lwork=int(work(1))
+        deallocate(work)
+        allocate(work(lwork))
+        call dorgqr(N,N,N,CTs(1:N,1:N),N,Tau,work,lwork,info)
+        CPASSERT(info==0)
         
+        ! Calculate localized orbitals
+        vectors%local_data = matmul(real(vectors%local_data),real(CTs(1:N,1:N)))
+
         ! Clean up
         deallocate(CTs)
         deallocate(Tau)
         deallocate(Work)
-        deallocate(Q)
-        deallocate(H)
+        deallocate(jpvt)
 
-   else
-   ! parallel version, no sampling 
-#if defined(__SCALAPACK)
-        if (sample) then 
-           CPABORT("Sampling only defined for serial version")
-        end if
-        ! Create Transpose of C Matrix
-        lwork=-1
-        N = vectors%matrix_struct%ncol_global
-        M = vectors%matrix_struct%nrow_global
-        call cp_fm_struct_create(cstruct, vectors%matrix_struct%para_env, &
-                vectors%matrix_struct%context, N, M, vectors%matrix_struct%ncol_block, &
-                vectors%matrix_struct%nrow_block, first_p_pos=vectors%matrix_struct%first_p_pos)
-        descc(:)=cstruct%descriptor(:)
-        call cp_fm_create(CTp,cstruct)
-        call pdtran(N,M,1.0_dp,vectors%local_data(1,1),1,1,vectors%matrix_struct%descriptor,&
-                0.0_dp,CTp%local_data(1,1),1,1,descc)
-        
-        ! Allocating work variables
-        allocate(Q(N,N))
-        allocate(H(N,N))
-        a => CTp%local_data
-        ndim = size(a,2)
-        allocate(tau(N))
-        lwork=-1
-        allocate(work(2*ndim))
-        allocate(ipiv(M))
-
-        ! Call SCALAPACK routine
-        call pdgeqpf(n,m,a,1,1,descc,ipiv,tau,work,lwork,info)
-        lwork=INT(work(1))
-        deallocate(work)
-        allocate(work(lwork))
-        tau=0
-        ipiv=0
-        call pdgeqpf(n,m,a,1,1,descc,ipiv, tau,work,lwork,info)
-        CPASSERT(INFO==0)
-        ! Construction of Q from the scalapack output (should also be parallelized
-        ! in the future)
-        if (para_env%mepos==0 .and. all(tau==0)) then
-          CPABORT("tau 0 for process 0")
-        end if
-        call mp_bcast(msg=tau,source=0,gid=para_env%group)
-        allocate(matrix(N,N))
-        call cp_fm_get_submatrix(CTp, matrix,1,1,N,N)
-        do i = 1,N
-          do j=1,N
-            do k=j,N
-               if (j==k .and. j<i) then
-                    H(j,k)=1.0_dp
-               else if (j==k .and. j==i) then
-                    H(j,k)=1.0_dp - tau(i)
-               else if (j==k .and. j>i) then
-                    H(j,k)=1.0_dp - tau(i)*matrix(j,i)*matrix(j,i)
-               else if (j/=k .and. j==i .and. k>i) then
-                    H(j,k)=-tau(i)*matrix(k,i)
-                    H(k,j)=H(j,k)
-               else if (j/=k .and. j>i .and. k>i) then
-                    H(j,k)=-tau(i)*matrix(k,i)*matrix(j,i)
-                    H(k,j)=H(j,k)
-               else
-                    H(k,j)=0.0_dp
-                    H(j,k)=0.0_dp
-               end if
-            end do
-          end do
-          if (i == 1) then
-            Q = H
-          else
-            Q=matmul(Q,H)
-          end if   
-        end do
-        
-        ! Construct fm Q
-        call cp_fm_struct_release(cstruct)
-        call cp_fm_struct_create(cstruct,CTp%matrix_struct%para_env, CTp%matrix_struct%context,&
-               CTp%matrix_struct%nrow_global, CTp%matrix_struct%nrow_global, &
-               CTp%matrix_struct%nrow_block, CTp%matrix_struct%nrow_block, &
-               local_leading_dimension=CTp%matrix_struct%local_leading_dimension)
-        call cp_fm_create(Qf,cstruct)
-        do i = 1,N
-          do j = 1,N
-             call cp_fm_set_element(Qf,i,j,Q(i,j))
-          end do
-        end do
-        
-        ! Transform original coefficient matrix vectors
-        call cp_fm_create(tmp,vectors%matrix_struct)
-        call cp_fm_to_fm(vectors, tmp)
-        call cp_fm_gemm('N','N',vectors%matrix_struct%nrow_global,vectors%matrix_struct%ncol_global,&
-                vectors%matrix_struct%ncol_global,1.0_dp,tmp,Qf,0.0_dp,vectors)
-        
-        ! Clean up
-        call cp_fm_struct_release(cstruct)
-        call cp_fm_release(CTp)
-        call cp_fm_release(Qf)
-        deallocate(tau)
-        deallocate(work)
-        deallocate(Q)
-        deallocate(H)
-        deallocate(ipiv)
-        deallocate(matrix)
-
-#else
-        CPABORT("pdgeqrf() called without SCALAPACK compiled in")
 #endif
-   end if 
    CALL timestop(handle)
-   
   END SUBROUTINE scdm_rs
 end module scdm

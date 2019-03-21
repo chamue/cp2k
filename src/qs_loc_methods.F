@@ -247,7 +247,7 @@ CONTAINS
          END IF
       CASE (do_loc_scdmjacobi)
          t1=m_walltime()
-         CALL scdm_rs(vectors, para_env, sample)
+         CALL scdm_rs(vectors, sample)
          ! here we need to set zij for the computation of the centers and spreads
             DO i = 1, SIZE(zij_fm_set, 2)
                DO j = 1, SIZE(zij_fm_set, 1)
@@ -272,7 +272,7 @@ CONTAINS
          if (output_unit > 0) WRITE(output_unit, '(T4,A,F15.3)') "  Time Jacobi: ", t2-t1  
        CASE (do_loc_scdm)
          t1=m_walltime()
-         CALL scdm_rs(vectors, para_env, sample)
+         CALL scdm_rs(vectors, sample)
          ! here we need to set zij for the computation of the centers and spreads
             DO i = 1, SIZE(zij_fm_set, 2)
                DO j = 1, SIZE(zij_fm_set, 1)
