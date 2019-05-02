@@ -1,28 +1,29 @@
 !-----------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations         !
-!   Copyright (C) 2000 - 2014  CP2K developers group                          !
+!   Copyright (C) 2000 - 2019  CP2K developers group                          !
 !-----------------------------------------------------------------------------!
 
 ! *****************************************************************************
 !> \brief Localization method scdm using pivoted QR decomposition
 !> \par History Implementation scdm during master thesis
-!>              06.12.18: Serial Implementation Done, Commented out parts are 
-!>                        mostly for parallel uses in the future
+!>              06.12.18: Serial Implementation [chamue]
+!>              05.04.19: Parallel Implementation [chamue]
 !>
-!> \author Charlotte Mueller (12.2018) 
+!> \author Charlotte Mueller (04.2019) 
 ! *****************************************************************************
 MODULE scdm
    USE cp_fm_types,                      ONLY: cp_fm_type,&
                                                cp_fm_to_fm, &
                                                cp_fm_create, &
                                                cp_fm_release, &
-                                               cp_fm_to_fm_submat
+                                               cp_fm_to_fm_submat, &
+                                               cp_fm_set_all
    USE cp_fm_struct,                     ONLY: cp_fm_struct_type, &
                                                cp_fm_struct_create, &
                                                cp_fm_struct_release
    USE lapack,                           ONLY: lapack_dgeqp3
    USE kinds,                            ONLY: dp
-   USE cp_fm_basic_linalg,               ONLY: cp_fm_gemm                                  
+   USE cp_fm_basic_linalg,               ONLY: cp_fm_gemm
 #include "./base/base_uses.f90"
   
   IMPLICIT NONE
@@ -34,10 +35,11 @@ MODULE scdm
 CONTAINS
 ! *****************************************************************************
 !> \brief Computes localized orbitals by pivoted QR decomposition. Might be 
-!>        optimized by random sampling.
+!>        optimized by random sampling for very big systems. A keyword and 
+!>        (probably bugged) serial implementation is done.
 !> \param vectors: containing non-localized mo-coefficients
-!> \param weights: root of volume of single voxel (in realspace)
-!>
+!> \param sample: logical, only for serial implementation and very big systems
+!> \author Charlotte Mueller (charlotte.h.mueller@outlook.com)
 ! *****************************************************************************
   SUBROUTINE scdm_rs(vectors, sample)
    ! Input Variables
@@ -79,7 +81,6 @@ CONTAINS
         call cp_fm_create(CTp,cstruct)
         call pdtran(N,M,1.0_dp,vectors%local_data(1,1),1,1,vectors%matrix_struct%descriptor,&
                 0.0_dp,CTp%local_data(1,1),1,1,descc)
-
         ! Prepare work variables
         a => CTp%local_data
         allocate(tau(N))
@@ -97,14 +98,15 @@ CONTAINS
         ! Call SCALAPACK routine to get QR decomposition of CTs
         call pdgeqpf(n,m,a,1,1,descc,ipiv, tau,work,lwork,info)
         CPASSERT(INFO==0)
-
         ! Construction of Q from the scalapack output
+        print *, "Before creating Q"
         call cp_fm_struct_release(cstruct)
         call cp_fm_struct_create(cstruct,para_env=CTp%matrix_struct%para_env, &
                 context=CTp%matrix_struct%context, nrow_global=CTp%matrix_struct%nrow_global, &
                 ncol_global=CTp%matrix_struct%nrow_global)
         call cp_fm_create(Qf,cstruct)
         call cp_fm_to_fm_submat(CTp,Qf,N,N,1,1,1,1)
+        print *, "After creating Q"
         a => Qf%local_data
         lwork=-1
         ! Call SCALAPACK routine to get optimal work dimension
@@ -116,19 +118,22 @@ CONTAINS
         ! Call SCALAPACK routine to get Q 
         call pdorgqr(n,n,n,a,1,1,descc,tau,work,lwork,info)
         CPASSERT(info==0)
-
         ! Transform original coefficient matrix vectors
+        print *, "Before creating tmp"
         call cp_fm_create(tmp,vectors%matrix_struct)
+        CALL cp_fm_set_all(tmp, 0.0_dp, 1.0_dp)
         call cp_fm_to_fm(vectors, tmp)
         call cp_fm_gemm('N','N',M,N,N,1.0_dp,tmp,Qf,0.0_dp,vectors)
-        
+        print *, "After creating tmp"
         ! Clean up
         call cp_fm_struct_release(cstruct)
         call cp_fm_release(CTp)
+        call cp_fm_release(tmp)
         call cp_fm_release(Qf)
         deallocate(tau)
         deallocate(work)
         deallocate(ipiv)
+        print *, "After cleanup"
 #else
         N = size(vectors%local_data,dim=2)
         M = size(vectors%local_data,dim=1)
